@@ -1,7 +1,7 @@
 import axios from "axios";
 import { SourceCodeTaskRequest } from "../types";
-const apiToken =
-  "scce_923fb35a08b54da48cdb58d4e3aa13a2d92657896a5941b38163f2b6a1139528_cc3900f7";
+
+const apiToken = import.meta.env.VITE_API_TOKEN;
 
 const signaloidClient = axios.create({
   baseURL: "https://api.signaloid.io",
