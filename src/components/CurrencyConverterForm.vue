@@ -6,6 +6,9 @@ import {
   getTaskOutputs,
   extractUxStringValues,
   getSamplesFromUxString,
+  getSamplesFromTask,
+  extractValueIDTags,
+  parseOutputAndGetSamples,
 } from "../services/signaloid.api";
 
 export default defineComponent({
@@ -54,20 +57,24 @@ export default defineComponent({
 
       if (isValid && currencyPair.value) {
         const [baseCurrency, targetCurrency] = currencyPair.value.split(" to ");
+        const valueID = `val_${Math.random().toString(36).substr(2, 32)}`;
 
         const payload = {
           Type: "SourceCode",
           SourceCode: {
             Object: "SourceCode",
             Code: `
-              #include <stdio.h>
-              int main() {
-                printf("Converting %lf %s to %s with rate between %lf and %lf\\nUxString Ux...", 
-                (double)${amount.value}, "${baseCurrency}", "${targetCurrency}", (double)${minRate.value}, (double)${maxRate.value});
-                printf("UxString Ux...");
-                return 0;
-              }
-            `,
+          #include <stdio.h>
+          int main() {
+            double amount = ${amount.value};
+            double minRate = ${minRate.value};
+            double maxRate = ${maxRate.value};
+            printf("Converting %lf %s to %s with rate between %lf and %lf\\n<ValueID>${valueID}</ValueID> UxString Ux...", 
+            amount, "${baseCurrency}", "${targetCurrency}", minRate, maxRate);
+            printf("UxString Ux...");
+            return 0;
+          }
+        `,
             Arguments: "",
             Language: "C",
           },
@@ -88,8 +95,8 @@ export default defineComponent({
             const statusResponse = await getTaskStatus(taskID);
             taskStatus = statusResponse.Status;
           }
-
           const taskOutputs = await getTaskOutputs(taskID);
+          await parseOutputAndGetSamples(taskOutputs.Stdout, taskID);
 
           const uxStringsExtracted = await extractUxStringValues(
             taskOutputs.Stdout
@@ -113,7 +120,6 @@ export default defineComponent({
         }
       }
     };
-
     const amountErrorMessages = computed(() =>
       amountError.value ? [amountError.value] : []
     );
@@ -228,7 +234,11 @@ export default defineComponent({
         </v-form>
         <v-col cols="12" class="flex justify-center">
           <a v-if="resultUrl" :href="resultUrl" target="_blank">
-            Click here to view the distribution result
+            Click
+            <span style="text-decoration: underline; font-weight: bold"
+              >here</span
+            >
+            to view the distribution result
           </a>
         </v-col>
       </v-card-text>

@@ -83,3 +83,47 @@ export async function getSamplesFromUxString(uxString: string) {
     console.error("Error getting samples from Ux string:", error);
   }
 }
+
+export async function extractValueIDTags(taskOutput: string) {
+  const regex = /<ValueID>(.*?)<\/ValueID>/g;
+  return [...taskOutput.matchAll(regex)].map((m) => ({
+    valueID: m[1],
+  }));
+}
+
+export const getSamplesFromTask = async (taskID: string, valueID: string) => {
+  try {
+    const response = await signaloidClient.get(
+      `/tasks/${taskID}/values/${valueID}/samples`,
+      {
+        params: { count: 10 },
+      }
+    );
+    if (response.data) {
+      console.log(`Samples: `, response.data.Samples);
+    }
+  } catch (error) {
+    console.log("Error:", error);
+  }
+};
+
+export async function parseOutputAndGetSamples(
+  taskStdout: string,
+  taskID: string
+) {
+  if (taskStdout) {
+    const values = await extractValueIDTags(taskStdout);
+    const sigmaCMpa_valueID = values[values.length - 1].valueID;
+
+    if (sigmaCMpa_valueID) {
+      console.log(
+        `Generating samples from the distribution with valueID: ${sigmaCMpa_valueID}`
+      );
+      await getSamplesFromTask(taskID, sigmaCMpa_valueID);
+    }
+  } else {
+    setTimeout(async () => {
+      await parseOutputAndGetSamples(taskStdout, taskID);
+    }, 1000);
+  }
+}
