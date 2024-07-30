@@ -11,119 +11,100 @@ const signaloidClient = axios.create({
   },
 });
 
-export async function createTask(payload: SourceCodeTaskRequest) {
-  const response = await signaloidClient.post("/tasks", payload);
-
-  if (response.status !== 202) {
-    throw new Error(`Network response was not ok, status: ${response.status}`);
-  }
-
-  return response.data;
-}
-
-export async function getTaskStatus(taskID: string) {
-  const response = await signaloidClient.get(`/tasks/${taskID}`);
-
-  if (response.status !== 200) {
-    throw new Error(`Network response was not ok, status: ${response.status}`);
-  }
-
-  return response.data;
-}
-
-export async function getTaskOutputs(taskID: string) {
-  console.log("Fetching task outputs...");
+export const analyzeWithSignaloid = async (payload: SourceCodeTaskRequest) => {
   try {
-    const response = await signaloidClient.get(
-      `/tasks/${taskID}/outputs?sanitized=false`
-    );
+    const taskPostResponse = await signaloidClient.post("/tasks", payload);
+    const taskID = taskPostResponse.data.TaskID;
 
-    if (response.status !== 200) {
-      throw new Error(
-        `Network response was not ok, status: ${response.status}`
-      );
+    if (taskID) {
+      console.log(`...task successfully created with ID: ${taskID}`);
     }
 
-    const taskOutputsResponse = response.data;
-    if (taskOutputsResponse.Stdout) {
-      const outputStream = await axios.get(taskOutputsResponse.Stdout);
-      const taskStdout = outputStream.data;
-      console.log(`Task Stdout: \n${taskStdout}`);
-      return { Stdout: taskStdout };
+    let taskStatus = taskPostResponse.data.Status;
+    let result;
+    const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+    while (![`Completed`, `Cancelled`, `Stopped`].includes(taskStatus)) {
+      await delay(5000);
+      try {
+        const taskGetResponse = await signaloidClient.get(`/tasks/${taskID}`);
+        taskStatus = taskGetResponse.data.Status;
+        console.log(`...task status : ${taskStatus}`);
+
+        if (taskStatus === "Completed") {
+          try {
+            const taskOutputsResponse = await signaloidClient.get(
+              `/tasks/${taskID}/outputs?sanitized=false`
+            );
+            console.log("Task Outputs Response:", taskOutputsResponse.data);
+
+            if (taskOutputsResponse.data.Stdout) {
+              console.log("Task Output URL:", taskOutputsResponse.data.Stdout);
+              try {
+                const outputStream = await axios.get(
+                  taskOutputsResponse.data.Stdout
+                );
+                result = outputStream.data;
+              } catch (error: any) {
+                console.error("Error fetching task output:", error.message);
+                throw new Error("Error fetching task output");
+              }
+            }
+          } catch (error: any) {
+            console.error("Error fetching task outputs:", error.message);
+            throw new Error("Error fetching task outputs");
+          }
+        }
+      } catch (error: any) {
+        console.error("Error fetching task status:", error.message);
+        throw new Error("Error fetching task status");
+      }
     }
-  } catch (error) {
-    console.error("Error:", error);
+
+    if (result) {
+      const uxStrings = extractUxStringValues(result);
+      if (uxStrings.length > 0) {
+        const latestUxString = uxStrings[uxStrings.length - 1].uxString;
+        console.log(`Extracted UxString: ${latestUxString}`);
+        const plotUrl = await getPlotFromUXString(latestUxString);
+        return plotUrl;
+      } else {
+        throw new Error("No UxString found in the task output");
+      }
+    } else {
+      throw new Error("No result found in the task output");
+    }
+  } catch (error: any) {
+    console.error("General Error:", error.message);
+    throw error;
   }
-}
+};
 
-export async function extractUxStringValues(taskOutput: string) {
+export function extractUxStringValues(taskOutput: string) {
   const regex =
     /([-+]?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?)(Ux[0-9a-fA-F]{40,})/g;
-  return [...taskOutput.matchAll(regex)].map((m) => ({
+  const matches = [...taskOutput.matchAll(regex)];
+  if (matches.length === 0) {
+    throw new Error("Error extracting UXstring");
+  }
+  console.log("Regex Matches:", matches);
+  return matches.map((m) => ({
     value: m[1],
     uxString: m[2],
   }));
 }
 
-export async function getSamplesFromUxString(uxString: string) {
+export async function getPlotFromUXString(uxString: string) {
   try {
     const response = await signaloidClient.post(`/plot`, { payload: uxString });
-
-    console.log("response", response);
-
     if (response.status !== 201) {
       throw new Error(
         `Network response was not ok, status: ${response.status}`
       );
     }
-
-    const sampleData = response.data;
-    return sampleData.presignedURL;
+    return response.data.presignedURL;
   } catch (error) {
-    console.error("Error getting samples from Ux string:", error);
-  }
-}
-
-export async function extractValueIDTags(taskOutput: string) {
-  const regex = /<ValueID>(.*?)<\/ValueID>/g;
-  return [...taskOutput.matchAll(regex)].map((m) => ({
-    valueID: m[1],
-  }));
-}
-
-export const getSamplesFromTask = async (taskID: string, valueID: string) => {
-  try {
-    const response = await signaloidClient.get(
-      `/tasks/${taskID}/values/${valueID}/samples`,
-      {
-        params: { count: 10 },
-      }
-    );
-    if (response.data) {
-      console.log(`Samples: `, response.data.Samples);
-    }
-  } catch (error) {
-    console.log("Error:", error);
-  }
-};
-
-export async function parseOutputAndGetSamples(
-  taskStdout: string,
-  taskID: string
-) {
-  if (taskStdout) {
-    const values = await extractValueIDTags(taskStdout);
-    const sigmaCMpa_valueID = values[values.length - 1].valueID;
-
-    if (sigmaCMpa_valueID) {
-      console.log(
-        `Generating samples from the distribution with valueID: ${sigmaCMpa_valueID}`
-      );
-      await getSamplesFromTask(taskID, sigmaCMpa_valueID);
-    }
-  } else {
-    setTimeout(async () => {
-      await parseOutputAndGetSamples(taskStdout, taskID);
-    }, 1000);
+    console.error("Error getting plot from UxString:", error);
+    throw error;
   }
 }

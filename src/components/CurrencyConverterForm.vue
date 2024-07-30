@@ -1,15 +1,6 @@
 <script lang="ts">
 import { defineComponent, ref, computed } from "vue";
-import {
-  createTask,
-  getTaskStatus,
-  getTaskOutputs,
-  extractUxStringValues,
-  getSamplesFromUxString,
-  getSamplesFromTask,
-  extractValueIDTags,
-  parseOutputAndGetSamples,
-} from "../services/signaloid.api";
+import { analyzeWithSignaloid } from "../services/signaloid.api";
 
 export default defineComponent({
   name: "CurrencyConverterForm",
@@ -64,17 +55,35 @@ export default defineComponent({
           SourceCode: {
             Object: "SourceCode",
             Code: `
-          #include <stdio.h>
-          int main() {
-            double amount = ${amount.value};
-            double minRate = ${minRate.value};
-            double maxRate = ${maxRate.value};
-            printf("Converting %lf %s to %s with rate between %lf and %lf\\n<ValueID>${valueID}</ValueID> UxString Ux...", 
-            amount, "${baseCurrency}", "${targetCurrency}", minRate, maxRate);
-            printf("UxString Ux...");
-            return 0;
-          }
-        `,
+              #include <stdio.h>
+              #include <uxhw.h>
+
+              static void
+              loadInputs(double *amount, double *minRate, double *maxRate, double *conversionRate)
+              {
+                  *amount = ${amount.value};
+                  *minRate = ${minRate.value};
+                  *maxRate = ${maxRate.value};
+                  *conversionRate = UxHwDoubleUniformDist(*minRate, *maxRate);
+              }
+
+              int
+              main(int argc, char *argv[])
+              {
+                  double amount, minRate, maxRate, conversionRate, convertedAmount;
+
+                  loadInputs(&amount, &minRate, &maxRate, &conversionRate);
+
+                  convertedAmount = amount * conversionRate;
+
+                  printf("Converting %.2f from %s to %s with a rate between %.4f and %.4f\\n<ValueID>${valueID}</ValueID> UxString Ux...", 
+                      amount, "${baseCurrency}", "${targetCurrency}", minRate, maxRate);
+                  printf("Converted Amount: %.2f %s\\n", convertedAmount, "${targetCurrency}");
+                  printf("UxString Ux...");
+
+                  return 0;
+              }
+            `,
             Arguments: "",
             Language: "C",
           },
@@ -84,35 +93,8 @@ export default defineComponent({
         };
 
         try {
-          const taskResponse = await createTask(payload);
-
-          const taskID = taskResponse.TaskID;
-          let taskStatus = taskResponse.Status;
-
-          const delay = (ms) => new Promise((res) => setTimeout(res, ms));
-          while (![`Completed`, `Cancelled`, `Stopped`].includes(taskStatus)) {
-            await delay(2000);
-            const statusResponse = await getTaskStatus(taskID);
-            taskStatus = statusResponse.Status;
-          }
-          const taskOutputs = await getTaskOutputs(taskID);
-          await parseOutputAndGetSamples(taskOutputs.Stdout, taskID);
-
-          const uxStringsExtracted = await extractUxStringValues(
-            taskOutputs.Stdout
-          );
-          const uxString =
-            uxStringsExtracted[uxStringsExtracted.length - 1].uxString;
-
-          if (uxString) {
-            console.log(
-              `Generating samples from the distribution with uxString: ${uxString}`
-            );
-            const url = await getSamplesFromUxString(uxString);
-            resultUrl.value = url;
-          } else {
-            console.error("No UxString found in the task output.");
-          }
+          const plotUrl = await analyzeWithSignaloid(payload);
+          resultUrl.value = plotUrl;
         } catch (error) {
           console.error("Error converting currency:", error);
         } finally {
@@ -120,6 +102,7 @@ export default defineComponent({
         }
       }
     };
+
     const amountErrorMessages = computed(() =>
       amountError.value ? [amountError.value] : []
     );
@@ -245,3 +228,31 @@ export default defineComponent({
     </v-card>
   </v-container>
 </template>
+
+<style scoped>
+.form-container {
+  width: 60%;
+  margin: auto;
+  padding: 20px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.reduced-width {
+  max-width: 300px;
+  width: 100%;
+}
+
+.v-text-field,
+.v-select {
+  --v-input-control-height: 32px;
+}
+
+.v-input__control {
+  height: var(--v-input-control-height);
+}
+</style>
